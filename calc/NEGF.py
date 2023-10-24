@@ -13,25 +13,22 @@ import numpy as np
 
 kBT = k * T / eV
 
-
 def fermi_dirac(x: torch.Tensor) -> torch.Tensor:
     return 1 / (1 + torch.exp(x / kBT))
 
-
-class _fermi_dirac(torch.autograd.Function):
-    @staticmethod
-    def forward(ctx, x, kBT):
-        ctx.save_for_backward(x)
-        if T == 0 and x == 0:
-            return (torch.sign(x) + 1) / 2
-
+# class _fermi_dirac(torch.autograd.Function):
+#     @staticmethod
+#     def forward(ctx, x, kBT):
+#         ctx.save_for_backward(x)
+#         if T == 0 and x == 0:
+#             return (torch.sign(x) + 1) / 2
 
 class NEGF(object):
     def __init__(self, hmt_ovp: dict, dtype=torch.complex128, device='cpu', **options):
         '''
 
         :param hmt_ovp: transport system description, should be a dict form, containing:
-                ['id': the identity of the computed system, str
+                {'id': the identity of the computed system, str
                 'hd':list of Tensors
                 'hu':list of Tensors, the last item is the coupling matrix with right leads
                 'hl':list of Tensors, the last item is the coupling matrix with left leads,
@@ -40,11 +37,12 @@ class NEGF(object):
                 'rhd':
                 'rhu':
                 overlap is labeled as 'sd','lsd'... as such
-                ]
+                }
         :param dtype:
         :param device:
         :param options:
         '''
+        
         self.hmt_ovp = hmt_ovp
         self.basis_size = 0
         self.hd_shape = []
@@ -61,6 +59,8 @@ class NEGF(object):
         self.device = torch.device(device)
         self.dtype = dtype
         self.V_ext = {}
+        self.rho_ext = {}
+        self.rho = {}
         self.green = {}
         self.SE = {}
 
@@ -103,7 +103,8 @@ class NEGF(object):
             r_coup_u = self.hmt_ovp['hu'][-1]
             l_ovp_u = self.hmt_ovp['sl'][-1].conj().T
             r_ovp_u = self.hmt_ovp['su'][-1]
-            for e in tqdm(ee, desc="Compute Self-Energy: "):
+            # for e in tqdm(ee, desc="Compute Self-Energy: "):
+            for e in ee:
                 seL, _ = selfEnergy(hd=self.hmt_ovp['lhd'], hu=self.hmt_ovp['lhu'], sd=self.hmt_ovp['lsd'],
                                     su=self.hmt_ovp['lsu'], coup_u=l_coup_u, ovp_u=l_ovp_u, ee=e, left=True, voltage=ul,
                                     etaLead=etaLead, method=method)
@@ -113,7 +114,8 @@ class NEGF(object):
                 seL_list.append(seL)
                 seR_list.append(seR)
         else:
-            for e in tqdm(ee, desc="Compute Self-Energy: "):
+            # for e in tqdm(ee, desc="Compute Self-Energy: "):
+            for e in ee:
                 seL, _ = selfEnergy(hd=self.hmt_ovp['lhd'], hu=self.hmt_ovp['lhu'], sd=self.hmt_ovp['lsd'],
                                     su=self.hmt_ovp['lsu'], ee=e, left=True, voltage=ul, etaLead=etaLead,
                                     method=method)
@@ -127,8 +129,8 @@ class NEGF(object):
 
         return seL_list, seR_list
 
-    def SCF(self, ul: torch.Tensor, ur: torch.Tensor, atom_coord: torch.Tensor, d_trains: int, left_pos, right_pos, offset, del_V0=None,
-            n_int_neq=100, poissonMethod="image charge", sgfMethod='Sancho-Rubio', n_img=200, Emin=-25, etaLead=1e-5,
+    def SCF(self, ul: torch.Tensor, ur: torch.Tensor, atom_coord: torch.Tensor, d_trains: int, offset, left_pos=None, right_pos=None, del_V0=None,
+            espacing=0.01, poissonMethod="image charge", sgfMethod='Sancho-Rubio', dc=1.0, n_img=200, Emin=-25, etaLead=1e-5,
             etaDevice=0, maxIter=100, conv_err=1e-7, cutoff=True, SEpreCal=True, **SCFOptions):
         # return a V_ext under bias voltage
         if isinstance(ul, (float, int)):
@@ -142,9 +144,15 @@ class NEGF(object):
             return self.V_ext[(ul, ur)]
         if del_V0 is None:
             del_V0 = torch.zeros(len(offset), dtype=torch.float64, device=self.device)
+        if left_pos is None:
+            left_pos = atom_coord[:,d_trains].min()
+        if right_pos is None:
+            right_pos = atom_coord[:,d_trains].max()
 
         xl = min(ul, ur)
         xu = max(ul, ur)
+        n_int_neq = int((xu - xl + 8 * kBT) / espacing)
+
 
         # generating energy point for pole summation and Neq Density calculation
         pole, residue = pole_maker(Emin, ChemPot=float(xl.data) - 4 * kBT, kT=kBT, reltol=1e-15)
@@ -182,19 +190,20 @@ class NEGF(object):
                     dic[p] = (dic[p], len(params))
 
             fcn = lambda x, *p: self.scfFn_img(x, offset, imgCoord, self.basis_size, pole,
-                                               n_img, n_int_neq, residue, dic, etaLead, etaDevice, sgfMethod, *p)
+                                               n_img, espacing, residue, dic, etaLead, etaDevice, sgfMethod, dc, *p)
         else:
             raise ValueError
 
         V = _SCF.apply(fcn, del_V0, SCFOptions, maxIter, conv_err, "PDIIS", *params)
         self.V_ext.update({(float(ul), float(ur)): V})
+        self.rho_ext.update({(float(ul), float(ur)): self.rho_eq+self.rho_neq-rho0})
+        self.rho.update({(float(ul), float(ur)): self.rho_eq+self.rho_neq})
 
         return V
 
-    def scfFn_img(self, del_V, offset, imgCoord, basis_size, pole, n_img, n_int_neq, residue, dic, etaLead, etaDevice,
-                  sgfMethod, *params):
-        hd_ = self.attachPotential(offset, params[dic['hd'][0]:dic['hd'][1]], del_V,
-                                   basis_size)
+    def scfFn_img(self, del_V, offset, imgCoord, basis_size, pole, n_img, espacing, residue, dic, etaLead, etaDevice,
+                  sgfMethod, dc, *params):
+        hd_ = self.attachPotential(params[dic['hd'][0]:dic['hd'][1]],params[dic['sd'][0]:dic['sd'][1]], del_V)
         rho_eq = self.cal_EqDensity(pole, residue, ul=params[0],
                                     ur=params[1], offset=offset, hd=hd_,
                                     hu=params[dic['hu'][0]:dic['hu'][1]], hl=params[dic['hl'][0]:dic['hl'][1]],
@@ -205,11 +214,11 @@ class NEGF(object):
                                       hu=params[dic['hu'][0]:dic['hu'][1]], hl=params[dic['hl'][0]:dic['hl'][1]],
                                       sd=params[dic['sd'][0]:dic['sd'][1]], su=params[dic['su'][0]:dic['su'][1]],
                                       sl=params[dic['sl'][0]:dic['sl'][1]], SE_list=(params[5], params[6]),
-                                      n_int=n_int_neq,
+                                      espacing=espacing,
                                       sgfMethod=sgfMethod, etaDevice=etaDevice, etaLead=etaLead)
         del_rho = rho_eq + rho_neq - params[2]
         # transcript into xyz coordinate
-        del_V_dirichlet = density2Potential.apply(imgCoord, params[4], del_rho, n_img)
+        del_V_dirichlet = density2Potential.apply(imgCoord, params[4], del_rho, n_img, dc)
         del_V_ = del_V_dirichlet + params[3]
 
         return del_V_
@@ -258,18 +267,22 @@ class NEGF(object):
                                                s_out=None, eta=etaDevice)
                 eq = eq - residue[i] * torch.cat([i.diag() for i in grd], dim=0)
 
-        self.rho_eq = torch.zeros((len(offset),), dtype=torch.complex128, device=self.device)
+        rho_eq = torch.zeros((len(offset),), dtype=torch.complex128, device=self.device)
         for i in range(len(offset) - 1):
-            self.rho_eq[i] += eq[offset[i]:offset[i + 1]].sum()
-        self.rho_eq[-1] += eq[offset[-1]:].sum()
+            rho_eq[i] += eq[offset[i]:offset[i + 1]].sum()
+        rho_eq[-1] += eq[offset[-1]:].sum()
 
-        return 2 * self.rho_eq.imag
+        self.rho_eq = 2 * rho_eq.imag
+        return self.rho_eq
 
-    def cal_NeqDensity(self, ul, ur, offset, SE_list=None, n_int=100, etaLead=1e-5, etaDevice=0.,
+    def cal_NeqDensity(self, ul, ur, offset, SE_list=None, espacing=0.01, etaLead=1e-5, etaDevice=0.,
                        sgfMethod='Sancho-Rubio', **hmt_ovp):
         # n_int use when SE_list is not None
         xl = min(ul, ur) - 4 * kBT
         xu = max(ul, ur) + 4 * kBT
+
+        n_int = int((xu - xl) / espacing)
+
         neq = torch.zeros(self.basis_size, dtype=torch.float64, device=self.device)
 
         dic = {}
@@ -329,24 +342,29 @@ class NEGF(object):
                                                s_out=None, eta=etaDevice)
                 neq += wlg[i] * torch.cat([-2 * i.diag() for i in grd], dim=0).imag
 
-        self.rho_neq = torch.zeros((len(offset),), dtype=torch.float64, device=self.device)
+        rho_neq = torch.zeros((len(offset),), dtype=torch.float64, device=self.device)
         for i in range(len(offset) - 1):
-            self.rho_neq[i] += neq[offset[i]:offset[i + 1]].sum()
-        self.rho_neq[-1] += neq[offset[-1]:].sum()
+            rho_neq[i] += neq[offset[i]:offset[i + 1]].sum()
+        rho_neq[-1] += neq[offset[-1]:].sum()
+        self.rho_neq = rho_neq / (2 * pi)
 
-        return self.rho_neq / (2 * pi)
+        return self.rho_neq
 
     def calVdrop(self, ul, tCoord, left_pos, right_pos, ur):
         return ul + (ur - ul) * (tCoord - left_pos) / (right_pos - left_pos)
 
-    def attachPotential(self, offset, hd, V, basis_size):
-        offset_ = list(offset) + [basis_size]
-        site_V = torch.cat([V[i].repeat(offset_[i + 1] - offset_[i]) for i in range(len(offset_) - 1)], dim=0)
-        start = 0
+    def attachPotential(self, hd, sd, V):
+        # offset_ = list(offset) + [basis_size]
+        # site_V = torch.cat([V[i].repeat(offset_[i + 1] - offset_[i]) for i in range(len(offset_) - 1)], dim=0)
+        # start = 0
         hd_V = []
+        # print([hd[i].shape for i in range(len(hd))])
+        # print([sd[i].shape for i in range(len(sd))])
+        
         for i in range(len(hd)):
-            hd_V.append(hd[i] - torch.diag(site_V[start:start + len(hd[i])]))
-            start = start + len(hd[i])
+            
+            hd_V.append(hd[i] - sd[i] * V[i])
+            # hd_V.append(hd[i] - V[i])
 
         return hd_V
 
@@ -405,14 +423,15 @@ class NEGF(object):
         elif not ifSCF:
             V = None
         else:
-            V = self.SCF(ul, ur, **Options).detach()
+            V = self.SCF(ul, ur, **Options)
 
         if V is not None:
-            hd_ = self.attachPotential(Options['offset'], self.hmt_ovp['hd'], V, self.basis_size)
+            hd_ = self.attachPotential(self.hmt_ovp['hd'],self.hmt_ovp['sd'], V)
         else:
             hd_ = self.hmt_ovp['hd']
 
-        for i, e in tqdm(enumerate(ee), desc="Compute green functions: "):
+        # for i, e in tqdm(enumerate(ee), desc="Compute green functions: "):
+        for i, e in enumerate(ee):
             if e not in self.green.keys():
                 ans = recursive_gf(e, hl=self.hmt_ovp['hl'], hd=hd_, hu=self.hmt_ovp['hu'],
                                    sd=self.hmt_ovp['sd'], su=self.hmt_ovp['su'],
@@ -425,26 +444,27 @@ class NEGF(object):
         out = {}
         DOS = []
         TT = []
-        for i, e in tqdm(enumerate(ee), desc="Compute Properties: "):
+        # for i, e in tqdm(enumerate(ee), desc="Compute Properties: "):
+        for i, e in enumerate(ee):
             g_trans, grd, grl, gru, gr_left = self.green[float(e.data)]
             if calDOS:
                 DOS.append(self.calDOS(grd))
-            if calTT:
+            if calTT or calSeebeck:
                 TT.append(self.calTT(seL[i], seR[i], g_trans))
 
         if calDOS:
             out.update({'DOS': torch.stack(DOS)})
-        if calTT:
+        if calTT or calSeebeck:
             out.update({"TT": torch.stack(TT)})
         if calSeebeck:
-            out.update({"Seebeck": - torch.autograd.grad(out['TT'].sum(), ee)[0] / (out['TT'] + 1e-8)})
+            out.update({"Seebeck": - torch.autograd.grad(out["TT"].sum(), ee)[0] / (out['TT'] + 1e-8)})
 
         # end = time.time()
         # print(end-start)
 
         return out
 
-    def calCurrent_NUM(self, ul, ur, n_int=100, delta=1., **Options):
+    def calCurrent_NUM(self, ul, ur, n_int=50, delta=0.2, **Options):
         '''
         This method does not ensure the necessity of strict formula of gradient, but accurate numerical graident
         :param ul:
@@ -469,7 +489,7 @@ class NEGF(object):
         xs = xlg * (0.5 * (xu - xl)) + (0.5 * (xu + xl))
         TT = self.calGreen(xs, ul, ur, calTT=True, **Options)['TT']
         for i, t in enumerate(TT):
-            TT[i] = (fermi_dirac(xs[i] - xu + 1) - fermi_dirac(xs[i] - xl - 1)) * TT[i]
+            TT[i] = (fermi_dirac(xs[i] - xu) - fermi_dirac(xs[i] - xl)) * TT[i]
         Current = (TT * wlg).sum() / pi
 
         return Current
@@ -663,7 +683,7 @@ if __name__ == '__main__':
         etaLead=1e-5,
         etaDevice=0.,
         ifSCF=True,
-        n_int_neq=100,
+        espacing=0.01,
         cutoff=True,
         sgfMethod='Lopez-Schro'
     )

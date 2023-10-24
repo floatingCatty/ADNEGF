@@ -141,26 +141,26 @@ if __name__ == '__main__':
     import matplotlib.pyplot as plt
     import seaborn as sns
 
-    # sys = create_system(1.5, 3.5)
-    # fig = kwant.plot(sys, site_color=sns.color_palette("Blues")[4], hop_color=sns.color_palette("Blues")[2],
-    #            site_edgecolor=sns.color_palette("Blues")[0], hop_lw=2.5e-1, lead_color=sns.color_palette("Blues")[3],
-    #            lead_site_edgecolor=sns.color_palette("Blues")[2], dpi=600, fig_size=(5,2), show=False)
-    # # plt.title("AGNR of width 7", fontsize=12)
-    # # plt.tight_layout()
-    # plt.savefig("./experimental_data/AGNR(7).pdf", dpi=600)
-    # plt.show()
-    # plot_bands(sys)
-
-    sys = create_nanojunction(2.5, 1.0, 3.5)
+    sys = create_system(1.5, 3.5)
     fig = kwant.plot(sys, site_color=sns.color_palette("Blues")[4], hop_color=sns.color_palette("Blues")[2],
-                     site_edgecolor=sns.color_palette("Blues")[0], hop_lw=2.5e-1,
-                     lead_color=sns.color_palette("Blues")[3],
-                     lead_site_edgecolor=sns.color_palette("Blues")[2], dpi=600, fig_size=(5, 2), show=False)
-    # plt.title("Graphene Nanojunction of 5-2", fontsize=12)
+               site_edgecolor=sns.color_palette("Blues")[0], hop_lw=2.5e-1, lead_color=sns.color_palette("Blues")[3],
+               lead_site_edgecolor=sns.color_palette("Blues")[2], dpi=600, fig_size=(5,2), show=False)
+    # plt.title("AGNR of width 7", fontsize=12)
     # plt.tight_layout()
-    plt.savefig("./experimental_data/nanojunction_5_2.pdf", dpi=600)
+    plt.savefig("./experimental_data/AGNR(7).pdf", dpi=600)
     plt.show()
     plot_bands(sys)
+
+    # sys = create_nanojunction(2.5, 1.0, 3.5)
+    # fig = kwant.plot(sys, site_color=sns.color_palette("Blues")[4], hop_color=sns.color_palette("Blues")[2],
+    #                  site_edgecolor=sns.color_palette("Blues")[0], hop_lw=2.5e-1,
+    #                  lead_color=sns.color_palette("Blues")[3],
+    #                  lead_site_edgecolor=sns.color_palette("Blues")[2], dpi=600, fig_size=(5, 2), show=False)
+    # # plt.title("Graphene Nanojunction of 5-2", fontsize=12)
+    # # plt.tight_layout()
+    # plt.savefig("./experimental_data/nanojunction_5_2.pdf", dpi=600)
+    # plt.show()
+    # plot_bands(sys)
 
     # Es = np.linspace(-3, 3, 800)
     # plot_conductance(sys, Es)

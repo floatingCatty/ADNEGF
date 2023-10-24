@@ -18,7 +18,6 @@ from TB.orbitals import Orbitals
 from TB.aux_functions import dict2xyz, xyz2tensor
 from TB.block_tridiagonalization import find_nonzero_lines, split_into_subblocks_optimized, cut_in_blocks, \
     split_into_subblocks
-import nanonet.verbosity as verbosity
 from torch.autograd import gradcheck
 
 unique_distances = set()
@@ -239,10 +238,20 @@ class Hamiltonian(BasisTB):
         # print("aaaaaaaaaaaaaaaa")
         # print([x.detach() for x in self._atom_list.values()])
         if self.sort_func is not None:
-            labels = [item[0] for item in self._atom_list.items()]
-            coords = [item[1].detach() for item in self._atom_list.items()]
-            self._sort(labels, torch.stack(coords))
-        self._kd_tree = scipy.spatial.cKDTree(torch.stack([x.detach() for x in self._atom_list.values()]),
+            labels = [item[0] for item in self._atom_list_np.items()]
+            coords = [item[1] for item in self._atom_list_np.items()]
+            self._sort_device(labels, coords)
+            
+
+            # reconstruct offset
+            self._offsets = [0]
+            for j in range(len(self.atom_list) - 1):
+                self._offsets.append(self.orbitals_dict[list(self.atom_list.keys())[j]].num_of_orbitals)
+            self._offsets = np.cumsum(self._offsets)
+        # self._kd_tree = scipy.spatial.cKDTree(torch.stack([x.detach() for x in self._atom_list.values()]),
+        #                                       leafsize=1,
+        #                                       balanced_tree=True)
+        self._kd_tree = scipy.spatial.cKDTree(np.array(list(self._atom_list_np.values())),
                                               leafsize=1,
                                               balanced_tree=True)
         # print("bbbbbbbbbbbbbbbb")
@@ -276,8 +285,10 @@ class Hamiltonian(BasisTB):
                     for l1 in range(self.orbitals_dict[list(self.atom_list.keys())[j1]].num_of_orbitals):
                         ind1 = self.qn2ind([('atoms', j1), ('l', l1)], )
                         self.h_matrix[ind1, ind1] = self._get_me(j1, j2, l1, l1)
+
                         if self.compute_overlap:
                             self.ov_matrix[ind1, ind1] = self._get_me(j1, j2, l1, l1, overlap=True)
+                        # update coords
                         self._coords[ind1] = list(self.atom_list.values())[j1]
 
                         if self.so_coupling != 0:
@@ -293,6 +304,7 @@ class Hamiltonian(BasisTB):
                             ind2 = self.qn2ind([('atoms', j2), ('l', l2)], )
 
                             self.h_matrix[ind1, ind2] = self._get_me(j1, j2, l1, l2)
+                           
                             if self.compute_overlap:
                                 self.ov_matrix[ind1, ind2] = self._get_me(j1, j2, l1, l2, overlap=True)
 
@@ -362,7 +374,7 @@ class Hamiltonian(BasisTB):
         if self.compute_overlap:
 
             # vals, vects = scipy.linalg.eigh((self.h_matrix_bc_factor * self.h_matrix + self.h_matrix_bc_add).detach().numpy(),
-            #                                 (self.h_matrix_bc_factor * self.ov_matrix + self.ov_matrix_bc_add).detach().numpy())
+            #                                 (self.h_matrix_bc_factor * self.ov_matrix + self.ov_matrix_bc_add).detach()())
             # vals, vects = torch.tensor(vals), torch.tensor(vects)
             vals, vects = torch.linalg.eigh(torch.linalg.solve(self.h_matrix_bc_factor * self.ov_matrix + self.ov_matrix_bc_add, self.h_matrix_bc_factor * self.h_matrix + self.h_matrix_bc_add))
 
@@ -487,6 +499,7 @@ class Hamiltonian(BasisTB):
                 which_neighbour = ""
             else:
                 which_neighbour = self.int_radial_dependence(norm)
+
             # adding radial dependence
             # if self.radial_dependence is None:
             #     factor = 1.0
@@ -697,12 +710,12 @@ class Hamiltonian(BasisTB):
             # loop through all interfacial atoms
             for j1 in self.ct.interfacial_atoms_ind:
 
-                list_of_neighbours = self.ct.get_neighbours(list(self.atom_list.values())[j1])
+                list_of_neighbours = self.ct.get_neighbours(list(self.atom_list_np.values())[j1])
 
                 for j2 in list_of_neighbours:
 
                     coords = list(self.atom_list.values())[j1] - \
-                             list(self.ct.virtual_and_interfacial_atoms.values())[j2]
+                             torch.tensor(list(self.ct.virtual_and_interfacial_atoms.values())[j2])
 
                     if split_the_leads and two_leads:
                         flag = self.ct.atom_classifier(list(self.ct.virtual_and_interfacial_atoms.values())[j2],
@@ -809,15 +822,16 @@ class Hamiltonian(BasisTB):
             left = max(h_l_h, h_r_v)
             right = max(h_r_h, h_l_v)
 
-        if optimized:
-            subblocks = split_into_subblocks_optimized(h0, left=left, right=right)
-        else:
-            subblocks = split_into_subblocks(h0, left, right)
+        with torch.no_grad():
+            if optimized:
+                subblocks = split_into_subblocks_optimized(h0, left=left, right=right)
+            else:
+                subblocks = split_into_subblocks(h0, left, right)
 
         h01, hl1, hr1 = cut_in_blocks(h0, subblocks)
 
         if self.compute_overlap:
-            s01, sl1, sr1 = cut_in_blocks(self.ov_matrix, subblocks)
+            s01, sl1, sr1 = cut_in_blocks(s0, subblocks)
 
         if left is not None and right is not None:
             hl1.append(hl[:left, -right:])

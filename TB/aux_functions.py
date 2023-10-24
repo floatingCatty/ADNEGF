@@ -105,6 +105,44 @@ def accum(accmap, input, func=None, size=None, fill_value=0, dtype=None):
 
     return out
 
+def xyz2np(xyz):
+    """Transforms xyz-file formatted string to lists of atomic labels and coordinates
+    Parameters
+    ----------
+    xyz :
+        xyz-formatted string
+    Returns
+    -------
+    list, list
+        list of labels and list of coordinates
+    """
+
+    xyz = xyz.splitlines()
+    num_of_atoms = int(xyz[0])
+    ans = np.zeros((num_of_atoms, 3))
+    j = 0
+    atoms = []
+    unique_labels = dict()
+
+    for line in xyz[2:]:
+        if len(line.strip()) > 0:
+            temp = line.split()
+            label = ''.join([i for i in temp[0] if not i.isdigit()])
+
+            try:
+                unique_labels[label] += 1
+                temp[0] = label + str(unique_labels[label])
+            except KeyError:
+                temp[0] = label + '1'
+                unique_labels[label] = 1
+
+            atoms.append(temp[0])
+            ans[j, 0] = float(temp[1])
+            ans[j, 1] = float(temp[2])
+            ans[j, 2] = float(temp[3])
+            j += 1
+
+    return atoms, ans
 
 def xyz2tensor(xyz):
     """Transforms xyz-file formatted string to lists of atomic labels and coordinates
@@ -187,7 +225,7 @@ def get_k_coords(special_points, num_of_points, label):
         array of coordinates in k-space
     """
 
-    from nanonet.tb.special_points import SPECIAL_K_POINTS_BI, SPECIAL_K_POINTS_SI
+    from TB.special_points import SPECIAL_K_POINTS_BI, SPECIAL_K_POINTS_SI
 
     if isinstance(label, str):
         if label == 'Bi':
@@ -630,6 +668,6 @@ def is_in_coords(coord, coords):
     ans = False
 
     for xyz in list(coords):
-        ans += (torch.norm(coord - xyz) < 0.01)
+        ans += (np.linalg.norm(coord - xyz) < 0.01)
 
     return ans

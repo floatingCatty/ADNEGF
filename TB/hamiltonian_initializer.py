@@ -9,7 +9,7 @@ import numpy as np
 from TB.orbitals import Orbitals
 from TB import tb_params as dme
 from TB.hamiltonian import Hamiltonian
-from nanonet.tb.hamiltonian_sparse import HamiltonianSp
+from TB.hamiltonian_sparse import HamiltonianSp
 import torch
 import torch.nn as nn
 

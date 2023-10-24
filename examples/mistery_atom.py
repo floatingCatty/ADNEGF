@@ -1,5 +1,7 @@
+import sys
+import os
+sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from calc.NEGF import NEGF
-from skopt.space import Real
 from bayes_opt import BayesianOptimization
 from matplotlib.legend_handler import HandlerTuple
 import time
@@ -10,10 +12,8 @@ import numpy as np
 from calc.utils import geneticalgorithm as ga
 from bayes_opt.event import Events
 import torch
-from skopt import BayesSearchCV
 from ase.build.ribbon import graphene_nanoribbon
 from ase.visualize.plot import plot_atoms
-import seaborn as sns
 from TB import *
 import matplotlib.pyplot as plt
 
@@ -203,14 +203,14 @@ def BO(k, delta=0.5):
     point = []
     timelist = []
 
-    start = time.time()
+    start = time.perf_counter()
     for _ in range(100):
         next_point = optimizer.suggest(utility)
         target = opt_fn(**next_point)
         optimizer.register(params=next_point, target=target)
         loss.append(target)
         point.append(next_point)
-        timelist.append(time.time()-start)
+        timelist.append(time.perf_counter()-start)
         print(target, next_point, timelist[-1])
     print(optimizer.max)
 
@@ -285,7 +285,7 @@ def GB(k, delta, method='LBFGS'):
             return TT
 
         optimizer.step(closure)
-    start = time.time()
+    start = time.perf_counter()
     timelist = []
     if method == 'RMSprop':
         optimizer = RMSprop([CM], lr=(k+1)*0.005)
@@ -300,7 +300,7 @@ def GB(k, delta, method='LBFGS'):
                 if (CM[i] - org_CM[i]).abs() > delta:
                     if CM[i] < org_CM[i]: CM[i] = org_CM[i] - delta
                     else: CM[i] = org_CM[i] + delta
-            timelist.append(time.time()-start)
+            timelist.append(time.perf_counter()-start)
 
             loss.append(TT.detach())
     loss = torch.stack(loss)
@@ -526,10 +526,11 @@ if __name__ == '__main__':
     # plt.plot(C_M)
     # plt.show()
 
-    # for i in range(1):
-    #     BO(i, delta=0.3)
-    # for i in range(1):
-    #     GB(k=i, delta=0.3, method='RMSprop')
+    with torch.no_grad():
+        for i in range(1):
+            BO(i, delta=0.3)
+    for i in range(1):
+        GB(k=i, delta=0.3, method='RMSprop')
 
     # f = torch.load("./dop_GB_RMSprop12.pth")
     # plt.plot(f['loss'])
@@ -540,4 +541,4 @@ if __name__ == '__main__':
     #
     # for i in range(1,2):
     #     Genetic(k=i, delta=0.3)
-    plot("TT")
+    # plot("TT")

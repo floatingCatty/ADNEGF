@@ -1,13 +1,14 @@
 from fmm3dpy import lfmm3d
 import torch
 from Constant import *
+import time
 
 class density2Potential(torch.autograd.Function):
     '''
     This solves a poisson equation with dirichlet boundary condition
     '''
     @staticmethod
-    def forward(ctx, imgCoord, coord, density, n):
+    def forward(ctx, imgCoord, coord, density, n, dc):
         img_density = density.view(-1,1,1).expand(-1,1,n)
         img_density = torch.cat([img_density, -img_density, img_density, -img_density], dim=1)
         img_density = img_density.reshape(-1)
@@ -47,25 +48,61 @@ class density2Potential(torch.autograd.Function):
 
             if coord.requires_grad:
                 grad_coord.append(out.gradtarg)
-
+        start = time.time()
         out = lfmm3d(eps=1e-10, sources=imgCoord.transpose(1, 0).numpy(), charges=img_density.numpy(), dipvec=None,
                                 targets=coord.transpose(1,0).numpy(), pgt=pgt)
         V = torch.tensor(V) + torch.tensor(out.pottarg)
         if coord.requires_grad:
             grad_coord = torch.tensor(grad_coord) + torch.tensor(out.gradtarg)
-        ctx.save_for_backward(coord, torch.tensor(grad_coord), imgCoord, torch.tensor(n))
-        return V / (4*pi)
+        ctx.save_for_backward(coord, torch.tensor(grad_coord), imgCoord, torch.tensor(n), torch.tensor(dc))
+        return V / (4*pi*dc)
 
+    # @staticmethod
+    # def backward(ctx, *grad_outputs):
+    #     # to avoid the overflow and overcomplexity, the backward can also be viewed as a fmm.
+    #     coord, grad_coord, imgCoord, n, dc = ctx.saved_tensors
 
+    #     grad_density = []
+    #     grad_outputs = grad_outputs[0].reshape(-1)
+    #     if len(grad_coord) > 0:
+    #         grad_coord = torch.einsum("i,ijk->jk",grad_outputs, grad_coord)
+    #         grad_coord = grad_coord.transpose(1,0)
+
+    #     img_grad_outputs = grad_outputs.view(-1, 1, 1).expand(-1, 1, n)
+    #     img_grad_outputs = torch.cat([img_grad_outputs, -img_grad_outputs, img_grad_outputs, -img_grad_outputs])
+    #     img_grad_outputs = img_grad_outputs.reshape(-1)
+    #     for i in range(grad_outputs.shape[0]):
+    #         grad_outputs_ = torch.cat([grad_outputs[0:i],grad_outputs[i+1:]], dim=0)
+    #         coord_ = torch.cat([coord[0:i], coord[i+1:]], dim=0)
+
+    #         grad_out = lfmm3d(eps=1e-7, sources=coord_.transpose(1, 0).detach().numpy(), charges=grad_outputs_.detach().numpy(), dipvec=None,
+    #                             targets=coord[i].unsqueeze(1).detach().numpy(), pgt=1)
+    #         grad_density.append(grad_out.pottarg[0])
+    #     imgCoord = imgCoord.transpose(1, 0).detach().numpy()
+    #     img_grad_outputs = img_grad_outputs.detach().numpy()
+    #     coord = coord.transpose(1,0).detach().numpy()
+        
+    #     grad_out = lfmm3d(eps=1e-15, sources=imgCoord, charges=img_grad_outputs, dipvec=None,
+    #                             targets=coord, pgt=1)
+    #     grad_density = torch.tensor(grad_density) + torch.tensor(grad_out.pottarg)
+    #     # grad_density = torch.tensor(grad_out.pottarg)
+
+    #     if len(grad_coord) == 0:
+    #         return None, None, grad_density / (4*pi * dc), None, None
+    #     else:
+    #         return None, grad_coord.squeeze(-1), grad_density / (4*pi*dc), None, None
+        
     @staticmethod
     def backward(ctx, *grad_outputs):
         # to avoid the overflow and overcomplexity, the backward can also be viewed as a fmm.
-        coord, grad_coord, imgCoord, n = ctx.saved_tensors
+        coord, grad_coord, imgCoord, n, dc = ctx.saved_tensors
 
         grad_density = []
         grad_outputs = grad_outputs[0].reshape(-1)
-        grad_coord = torch.einsum("i,ijk->jk",grad_outputs, grad_coord)
-        grad_coord = grad_coord.transpose(1,0)
+        if len(grad_coord) > 0:
+            grad_coord = torch.einsum("i,ijk->jk",grad_outputs, grad_coord)
+            grad_coord = grad_coord.transpose(1,0)
+            
         img_grad_outputs = grad_outputs.view(-1, 1, 1).expand(-1, 1, n)
         img_grad_outputs = torch.cat([img_grad_outputs, -img_grad_outputs, img_grad_outputs, -img_grad_outputs])
         img_grad_outputs = img_grad_outputs.reshape(-1)
@@ -73,17 +110,22 @@ class density2Potential(torch.autograd.Function):
             grad_outputs_ = torch.cat([grad_outputs[0:i],grad_outputs[i+1:]], dim=0)
             coord_ = torch.cat([coord[0:i], coord[i+1:]], dim=0)
 
-            grad_out = lfmm3d(eps=1e-15, sources=coord_.transpose(1, 0).detach().numpy(), charges=grad_outputs_.detach().numpy(), dipvec=None,
-                                targets=coord[i].unsqueeze(1).detach().numpy(), pgt=1)
-            grad_density.append(grad_out.pottarg[0])
-        grad_out = lfmm3d(eps=1e-15, sources=imgCoord.transpose(1, 0).detach().numpy(), charges=img_grad_outputs.detach().numpy(), dipvec=None,
-                                targets=coord.transpose(1,0).detach().numpy(), pgt=1)
-        grad_density = torch.tensor(grad_density) + torch.tensor(grad_out.pottarg)
+            # grad_out = lfmm3d(eps=1e-15, sources=coord_.transpose(1, 0).detach().numpy(), charges=grad_outputs_.detach().numpy(), dipvec=None,
+            #                     targets=coord[i].unsqueeze(1).detach().numpy(), pgt=1)
+            grad_out = torch.sum(grad_outputs_ / (coord_ - coord[i].unsqueeze(0)).norm(dim=1))
+            grad_density.append(grad_out)
+        # grad_out = lfmm3d(eps=1e-15, sources=imgCoord.transpose(1, 0).detach().numpy(), charges=img_grad_outputs.detach().numpy(), dipvec=None,
+        #                         targets=coord.transpose(1,0).detach().numpy(), pgt=1)
+        
+        grad_out = []
+        for i in range(len(coord)):
+            grad_out.append(torch.sum(img_grad_outputs / (imgCoord - coord[i].unsqueeze(0).repeat(len(imgCoord), 1)).norm(dim=-1)))
+        grad_density = torch.stack(grad_density) + torch.tensor(grad_out)
 
         if len(grad_coord) == 0:
-            return None, None, grad_density / (4*pi), None
+            return None, None, grad_density / (4*pi * dc), None, None
         else:
-            return None, grad_coord.squeeze(-1), grad_density / (4*pi), None
+            return None, grad_coord.squeeze(-1), grad_density / (4*pi*dc), None, None
 
 def getImg(n, coord, d, dim=2):
     zj = coord[:, dim]

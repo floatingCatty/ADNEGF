@@ -4,6 +4,87 @@ from xitorch.linalg.solve import solve
 import scipy.linalg as SLA
 import matplotlib.pyplot as plt
 from xitorch.grad.jachess import jac
+from torch.autograd.functional import jvp
+from calc.SCF import PDIIS
+import matplotlib.pyplot as plt
+
+
+def iterative(h00, h01, s00, s01, ee, left=True):
+    gs = torch.eye(h00.shape[0], dtype=torch.complex128)
+    converged = False
+    count = 0
+
+    if left:
+        def fn(gs, ee, h00, h01, s00, s01):
+            return tLA.pinv(ee*s00 - h00 - (ee * s01.conj().T - h01.conj().T) @ gs.reshape(h00.shape) @ (ee * s01 - h01))
+    else:
+        def fn(gs, ee, h00, h01, s00, s01):
+            return tLA.pinv(ee*s00 - h00 - (ee * s01 - h01) @ gs.reshape(h00.shape) @ (ee * s01.conj().T - h01.conj().T))
+
+    fcn = lambda gs: fn(gs, ee, h00, h01, s00, s01).view(-1)
+    gs_ = PDIIS(fcn, gs.view(-1), a=0.2, maxIter=200)
+    # while not converged:
+    #     gs_ = PDIIS(fcn, gs)
+    #     # gs_ = fn(ee, h00, h01, s00, s01)
+    #     err = (gs_ - gs).abs().max()
+        
+    #     if err <= 1e-4:
+    #         converged = True
+    #     gs = 0.95*gs + 0.05*gs_
+    #     count += 1
+    # print(count)
+
+    return gs_.reshape(h00.shape)
+
+def other(H, h01, S, s01, ee, left=True, method='Lopez-Sancho'):
+    h10 = h01.conj().T
+    s10 = s01.conj().T
+    alpha, beta = h10 - ee * s10, h01 - ee * s01
+    eps, epss = H.clone(), H.clone()
+    
+    converged = False
+    iteration = 0
+    while not converged:
+        iteration += 1
+        oldeps, oldepss = eps.clone(), epss.clone()
+        oldalpha, oldbeta = alpha.clone(), beta.clone()
+        tmpa = tLA.solve(ee * S - oldeps, oldalpha)
+        tmpb = tLA.solve(ee * S - oldeps, oldbeta)
+
+        alpha, beta = torch.mm(oldalpha, tmpa), torch.mm(oldbeta, tmpb)
+        eps = oldeps + torch.mm(oldalpha, tmpb) + torch.mm(oldbeta, tmpa)
+        if left:
+            epss = oldepss + torch.mm(oldalpha, tmpb)
+        else:
+            epss = oldepss + torch.mm(oldbeta, tmpa)
+        LopezConvTest = torch.max(alpha.abs() + beta.abs())
+
+        if iteration == 101:
+            print("Lopez-scheme not converged after 100 iteration.")
+
+        if LopezConvTest < 1.0e-40:
+            gs = (ee * S - epss).inverse()
+
+            if left:
+                test = ee * S - H - torch.mm(ee * s10 - h10, gs.mm(ee * s01 - h01))
+            else:
+                test = ee * S - H - torch.mm(ee * s01 - h01, gs.mm(ee * s10 - h10))
+            myConvTest = torch.max((test.mm(gs) - torch.eye(H.shape[0], dtype=h01.dtype)).abs())
+            if myConvTest < 1.0e-7:
+                converged = True
+                if myConvTest > 1.0e-10:
+                    v = "RIGHT"
+                    if left: v = "LEFT"
+                    print(
+                        "WARNING: Lopez-scheme not-so-well converged for " + v + " electrode at E = %.4f eV:" % ee.real.item(),
+                        myConvTest.item())
+            else:
+                print("Lopez-Sancho", myConvTest,
+                        "Error: gs iteration {0}".format(iteration))
+                raise ArithmeticError("Criteria not met. Please check output...")
+            
+    return gs
+
 
 class surface_green(torch.autograd.Function):
 
@@ -15,12 +96,14 @@ class surface_green(torch.autograd.Function):
         '''
         if method == 'GEP':
             gs = calcg0(ee, H, S, h01, s01, left=left)
+        elif method == 'iterative':
+            gs = iterative(H, h01, S, s01, ee, left)
         else:
             h10 = h01.conj().T
             s10 = s01.conj().T
             alpha, beta = h10 - ee * s10, h01 - ee * s01
             eps, epss = H.clone(), H.clone()
-
+            
             converged = False
             iteration = 0
             while not converged:
@@ -38,6 +121,9 @@ class surface_green(torch.autograd.Function):
                     epss = oldepss + torch.mm(oldbeta, tmpa)
                 LopezConvTest = torch.max(alpha.abs() + beta.abs())
 
+                if iteration == 101:
+                    print("Lopez-scheme not converged after 100 iteration.")
+
                 if LopezConvTest < 1.0e-40:
                     gs = (ee * S - epss).inverse()
 
@@ -46,9 +132,9 @@ class surface_green(torch.autograd.Function):
                     else:
                         test = ee * S - H - torch.mm(ee * s01 - h01, gs.mm(ee * s10 - h10))
                     myConvTest = torch.max((test.mm(gs) - torch.eye(H.shape[0], dtype=h01.dtype)).abs())
-                    if myConvTest < 1.0e-5:
+                    if myConvTest < 1.0e-7:
                         converged = True
-                        if myConvTest > 1.0e-8:
+                        if myConvTest > 1.0e-10:
                             v = "RIGHT"
                             if left: v = "LEFT"
                             print(
@@ -85,9 +171,17 @@ class surface_green(torch.autograd.Function):
         with torch.enable_grad():
 
             grad = jac(fcn=sgfn, params=(gs_, *params), idxs=[0])[0] # dfdz
-            pre = solve(A=grad.H, B=-grad_outputs.reshape(-1, 1))
-            pre = pre.reshape(grad_outputs.shape)
+            # plt.matshow(grad.fullmatrix().detach().real, cmap="bwr", vmax=0.1, vmin=-0.1)
+            # plt.show()
+            # plt.matshow((ee_*S_ - H_).inverse().detach().real, cmap="bwr", vmax=1, vmin=-1)
+            with open("/data/ADNEGF/data/norm_gs/gs-2.txt", "a") as f:
+                f.writelines(str(gs_.detach().real.norm().item())+"\n")
 
+            pre = solve(A=grad.H, B=-grad_outputs.reshape(-1, 1))
+
+            # print("pre:", pre.norm().item(), "go: ", grad_outputs.norm().item())
+            pre = pre.reshape(grad_outputs.shape)
+            
             yfcn = sgfn(gs_, *params_copy)
 
             grad = torch.autograd.grad(yfcn, [params_copy[i] for i in idx], grad_outputs=pre,
@@ -109,6 +203,36 @@ class surface_green(torch.autograd.Function):
             # return *grad, None, None
             return *grad_out, None, None
 
+    @staticmethod
+    def jvp(ctx, grad_input):
+        # should be of shape as [H, h01, S, s01, ee]
+        gs_, H_, h01_, S_, s01_, ee_ = ctx.saved_tensors
+        left = ctx.left
+
+        if left:
+            def sgfn(gs, *params):
+                [H, h01, S, s01, ee] = params
+                return tLA.inv(ee*S-H-(ee*s01.conj().T-h01.conj().T).matmul(gs).matmul(ee*s01-h01)) - gs
+        else:
+            def sgfn(gs, *params):
+                [H, h01, S, s01, ee] = params
+                return tLA.inv(ee*S - H - (ee*s01 - h01).matmul(gs).matmul(ee*s01.conj().T - h01.conj().T)) - gs
+        
+        yfcn = sgfn(gs_, *params_copy)
+
+        params = [H_, h01_, S_, s01_, ee_]
+        idx = [i for i in range(len(params)) if params[i].requires_grad]
+        params_copy = [p.detach().requires_grad_() for p in params]
+
+        with torch.enable_grad():
+            _, grad_fw = jvp(func=yfcn, inputs=[params_copy[i] for i in idx], v=[grad_input[i] for i in idx], create_graph=torch.is_grad_enabled())
+            dfdy = jac(fcn=sgfn, params=(gs_, *params), idxs=[0])[0]
+
+            out = [solve(A=dfdy, B=-gf.reshape(-1, 1)).conj().reshape(gf.shape) for gf in grad_fw]
+
+            return torch.mean(out, dim=0)
+
+
 
 def selfEnergy(hd, hu, sd, su, ee, coup_u=None, ovp_u=None, left=True, etaLead=1e-8, Bulk=False, voltage=0.0, dtype=torch.complex128, device='cpu', method='Lopez-Sancho'):
 
@@ -120,7 +244,9 @@ def selfEnergy(hd, hu, sd, su, ee, coup_u=None, ovp_u=None, left=True, etaLead=1
     if coup_u == None:
         ESH = (eeshifted * sd - hd)
         SGF = surface_green.apply(hd, hu, sd, su, eeshifted + 1j * etaLead, left, method)
-        # Sig = -0.5j*10 * torch.ones_like(SGF)
+        # SGF = other(hd, hu, sd, su, eeshifted + 1j * etaLead, left, method)
+        # SGF = iterative(hd, hu, sd, su, eeshifted + 1j * etaLead, left)
+        # Sig = -0.5j*10 * torch.ones_like(ESH)
         # SGF = tLA.inv(ESH - Sig)
 
         if Bulk:
@@ -130,6 +256,9 @@ def selfEnergy(hd, hu, sd, su, ee, coup_u=None, ovp_u=None, left=True, etaLead=1
     else:
         a, b = coup_u.shape
         SGF = surface_green.apply(hd, hu, sd, su, eeshifted + 1j * etaLead, left, method)
+        # SGF = other(hd, hu, sd, su, eeshifted + 1j * etaLead, left, method)
+        # SGF = iterative(hd, hu, sd, su, eeshifted + 1j * etaLead, left)
+        # SGF = SZTorch(hd, hu, sd, su, eeshifted + 1j * etaLead, left)
         if left:
             Sig = (ee*ovp_u.conj().T-coup_u.conj().T) @ SGF[-a:,-a:] @ (ee*ovp_u-coup_u)
         else:
@@ -152,13 +281,17 @@ def calcg0(ee, h00, s00, h01, s01, left=True):
     # Solve generalized eigen-problem
     # ( e I - h00 , -I) (eps)          (h01 , 0) (eps)
     # ( h10       ,  0) (xi ) = lambda (0   , I) (xi )
+    
     a, b = torch.zeros((2 * NN, 2 * NN), dtype=h00.dtype), torch.zeros((2 * NN, 2 * NN),
                                                                              dtype=h00.dtype)
+    
     a[0:NN, 0:NN] = ee * s00 - h00
     a[0:NN, NN:2 * NN] = -torch.eye(NN, dtype=h00.dtype)
     a[NN:2 * NN, 0:NN] = h01.conj().T - ee * s01.conj().T
     b[0:NN, 0:NN] = h01 - ee * s01
     b[NN:2 * NN, NN:2 * NN] = torch.eye(NN, dtype=h00.dtype)
+
+    
 
 
     ev, evec = SLA.eig(a=a, b=b)
@@ -196,7 +329,7 @@ def calcg0(ee, h00, s00, h01, s01, left=True):
     return g00
 
 
-def iterative_gf(ee, gs, h00, h01, s00, s01, iter=1, left=True):
+def iterative_gf(ee, gs, h00, h01, s00, s01, iter=10, left=True):
     for i in range(iter):
         if not left:
             gs = ee*s00 - h00 - (ee * s01 - h01) @ gs @ (ee * s01.conj().T - h01.conj().T)

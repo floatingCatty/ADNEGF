@@ -1,0 +1,10 @@
+torch>=1.13.0
+scipy==1.9.1
+numpy==1.23.4
+xitorch==0.3.0
+fmm3dpy==1.0.0
+func_timeout>=4.3.5
+matplotlib>=3.7.1
+future==0.18.2
+PyYAML==6.0
+ase>=3.23.0

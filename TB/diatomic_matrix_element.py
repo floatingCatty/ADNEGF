@@ -116,7 +116,7 @@ def d_me(N, l, m1, m2):
         prefactor = torch.sqrt(torch.tensor(math.factorial(l + m2) * math.factorial(l - m2) *
                               math.factorial(l + m1) * math.factorial(l - m1)))
     else:
-        if (1 - N) / (1 + N) == 0:
+        if (1 - N) == 0 or (1 + N) == 0:
             prefactor = 0*N
         else:
             prefactor = ((0.5 * (1 + N)) ** l) * (((1 - N) / (1 + N)) ** (m1 * 0.5 - m2 * 0.5)) * \
@@ -127,19 +127,21 @@ def d_me(N, l, m1, m2):
     for t in range(2 * l + 2):
         if l + m2 - t >= 0 and l - m1 - t >= 0 and t + m1 - m2 >= 0:
             if N == -1.0 and t == 0:
-                ans += torch.tensor(((-1) ** t) / \
-                       (math.factorial(l + m2 - t) * math.factorial(l - m1 - t) *
+                ans = ans + torch.tensor(((-1) ** t) / \
+                    (math.factorial(l + m2 - t) * math.factorial(l - m1 - t) *
                         math.factorial(t) * math.factorial(t + m1 - m2)))
             else:
-                if (1 - N) / (1 + N) == 0:
-                    ans += 0*N
+                if (1 - N) == 0 or (1 + N) == 0:
+                    ans = ans + 0*N
                 else:
-                    ans += ((-1) ** t) * (((1 - N) / (1 + N)) ** t) / \
-                           torch.tensor((math.factorial(l + m2 - t) * math.factorial(l - m1 - t) *
+                    ans = ans + ((-1) ** t) * (((1 - N) / (1 + N)) ** t) / \
+                        torch.tensor((math.factorial(l + m2 - t) * math.factorial(l - m1 - t) *
                             math.factorial(t) * math.factorial(t + m1 - m2)))
 
     # print(((0.5 * (1 + N)) ** l) * (((1 - N) / (1 + N)) ** (m1 * 0.5 - m2 * 0.5)), ans * prefactor)
-    return torch.nan_to_num(ans * prefactor)
+    # if torch.isnan(ans * prefactor) or torch.isinf(ans * prefactor):
+    #     print(N,l,m1,m2, ans, prefactor)
+    return ans * prefactor
 
 
 def tau(m):
@@ -291,6 +293,9 @@ def me(atom1, ll1, atom2, ll2, coords, norm, which_neighbour=0, overlap=False, r
             gamma = torch.atan2(L, M)
         else:
             gamma = 0*L*M
+        
+        if torch.isnan(gamma) or torch.isinf(gamma):
+            print(gamma, L, M)
 
         if l1 > l2:
             code = [n2, n1]
@@ -319,7 +324,7 @@ def me(atom1, ll1, atom2, ll2, coords, norm, which_neighbour=0, overlap=False, r
 
 
             for m in range(1, l_min + 1):
-                ans += (s_me(N, l1, m1, m, gamma) * s_me(N, l2, m2, m, gamma) +
+                ans = ans + (s_me(N, l1, m1, m, gamma) * s_me(N, l2, m2, m, gamma) +
                         t_me(N, l1, m1, m, gamma) * t_me(N, l2, m2, m, gamma)) * \
                        me_diatomic(atoms, code, l_min, l_max, m, which_neighbour, overlap=overlap)
         else:
@@ -328,16 +333,24 @@ def me(atom1, ll1, atom2, ll2, coords, norm, which_neighbour=0, overlap=False, r
             ans = factor * 2 * a_coef(m1, gamma) * a_coef(m2, gamma) * \
                   d_me(N, l1, abs(m1), 0) * d_me(N, l2, abs(m2), 0) * \
                   me_diatomic(atoms, code, l_min, l_max, 0, which_neighbour, overlap=overlap)
+            if torch.isnan(ans).any() or torch.isinf(ans).any():
+                print("Function me attained exceptional value (nan/inf).")
+                raise ValueError
             for m in range(1, l_min + 1):
                 factor = radial_dep(bl, norm, get_bl_param(atoms, code, l_min, l_max, m, which_neighbour, mode='pow'))
-                ans += factor * (s_me(N, l1, m1, m, gamma) * s_me(N, l2, m2, m, gamma) +
+                ans = ans + factor * (s_me(N, l1, m1, m, gamma) * s_me(N, l2, m2, m, gamma) +
                         t_me(N, l1, m1, m, gamma) * t_me(N, l2, m2, m, gamma)) * \
                        me_diatomic(atoms, code, l_min, l_max, m, which_neighbour, overlap=overlap)
+                if torch.isnan(ans).any() or torch.isinf(ans).any():
+                    print("Function me attained exceptional value (nan/inf).")
+                    raise ValueError
+
+            
 
         return prefactor * ans
     else:
         # print("AAAAAAAAAAA2")
-        return 0*coords[0]*coords[1]*coords[2]
+        return 0
 
 
 if __name__ == "__main__":

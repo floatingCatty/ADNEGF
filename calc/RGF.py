@@ -211,7 +211,7 @@ def recursive_gf(energy, hl, hd, hu, sd, su, sl, left_se=None, right_se=None, se
         List of upper-diagonal blocks
     mat_l_list : list of numpy.ndarray (dtype=numpy.float)
         List of lower-diagonal blocks
-    s_in :
+    s_in : Sigma_in contains self-energy about electron phonon scattering
          (Default value = 0)
     s_out :
          (Default value = 0)

@@ -48,19 +48,19 @@ def accum(accmap, input, func=None, size=None, fill_value=0, dtype=None):
     if accmap.shape[:input.ndim] != input.shape:
         raise ValueError("The initial dimensions of accmap must be the same as a.shape")
     if func is None:
-        func = torch.sum
+        func = sum
     if dtype is None:
         dtype = input.dtype
     if accmap.shape == input.shape:
         accmap = accmap.unsqueeze(-1)
-    adims = tuple(range(input.dim()))
+    adims = tuple(range(input.ndim))
     if size is None:
         size = 1 + accmap.flatten(adims[0], adims[-1]).max(dim=0)[0]
         # size = 1 + torch.squeeze(np.apply_over_axes(torch.max, accmap, axes=adims))
     size = torch.atleast_1d(size)
 
     # Create an array of python lists of values.
-    vals = np.empty(size.tolist(), dtype='O')
+    vals = np.empty([i for i in size], dtype='O')
     for s in product(*[range(k) for k in size]):
         vals[s] = []
     for s in product(*[range(k) for k in input.shape]):
@@ -160,7 +160,7 @@ def find_optimal_cut(edge, edge1, left, right):
 
     """
 
-    unique_indices = np.arange(left, len(edge) - right + 1)
+    unique_indices = torch.arange(left, len(edge) - right + 1)
     blocks = []
     seps = []
     sizes = []
@@ -175,27 +175,27 @@ def find_optimal_cut(edge, edge1, left, right):
         # print(item1)
 
         edge_1 = edge[:item1]
-        edge_2 = (edge1 - np.arange(len(edge1)))[item2:] + np.arange(item1)
+        edge_2 = (edge1 - torch.arange(len(edge1)))[item2:] + torch.arange(item1)
 
         edge_3 = edge1[:item2]
-        edge_4 = (edge - np.arange(len(edge)))[item1:] + np.arange(item2)
+        edge_4 = (edge - torch.arange(len(edge)))[item1:] + torch.arange(item2)
 
-        block1 = compute_blocks(left, (edge1 - np.arange(len(edge)))[item2],
+        block1 = compute_blocks(left, (edge1 - torch.arange(len(edge)))[item2],
                                 edge_1, edge_2)
 
-        block2 = compute_blocks(right, (edge - np.arange(len(edge1)))[item1],
+        block2 = compute_blocks(right, (edge - torch.arange(len(edge1)))[item1],
                                 edge_3, edge_4)
 
         block = block1 + block2[::-1]
         blocks.append(block)
-        metric.append(np.sum(np.array(block) ** 3))
+        metric.append(torch.sum(torch.tensor(block)**3))
         sizes.append((block1[-1], block2[-1]))
+    metric = torch.stack(metric)
 
     if len(metric) == 0:
         return [left, right], np.nan, 0, 0
     else:
-
-        best = np.argmin(np.array(metric))
+        best = torch.argmin(metric)
 
         blocks = blocks[best]
         blocks = [item for item in blocks if item != 0]
@@ -239,7 +239,7 @@ def compute_blocks_optimized(edge, edge1, left=1, right=1):
 
             edge_1 = edge[:sep]
             # edge_1[edge_1 > sep] = sep
-            edge_2 = (edge1 - np.arange(len(edge1)))[-sep:] + np.arange(sep)
+            edge_2 = (edge1 - torch.arange(len(edge1)))[-sep:] + torch.arange(sep)
 
             blocks1 = compute_blocks_optimized(edge_1, edge_2, left=left, right=right_block)
 
@@ -254,7 +254,7 @@ def compute_blocks_optimized(edge, edge1, left=1, right=1):
 
         if right + left_block < len(edge) - sep:
 
-            edge_3 = (edge - np.arange(len(edge)))[sep:] + np.arange(len(edge) - sep)
+            edge_3 = (edge - torch.arange(len(edge)))[sep:] + torch.arange(len(edge) - sep)
             edge_4 = edge1[:-sep]
             # edge_4[edge_4 > len(edge) - sep] = len(edge) - sep
 
@@ -504,11 +504,11 @@ def compute_edge(mat):
         row, col = torch.where(mat != 0.0)  # Output rows and columns of all non-zero elements.
 
     # Clever use of accumarray:
-    edge = accum(row, col, np.max) + 1
+    edge = accum(row, col, max) + 1
     edge[0] = max(0, edge[0])
     edge = torch.cummax(edge, dim=0)[0]
 
-    edge1 = accum(torch.max(row) - row.flip(0), torch.max(row) - col.flip(0), np.max) + 1
+    edge1 = accum(torch.max(row) - row.flip(0), torch.max(row) - col.flip(0), max) + 1
     edge1[0] = max(0, edge1[0])
     edge1 = torch.cummax(edge1, dim=0)[0]
 

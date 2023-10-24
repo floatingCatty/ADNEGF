@@ -8,7 +8,6 @@ from calc.surface_green import selfEnergy
 from calc.utils import finite_difference
 import numpy as np
 from tqdm import tqdm
-from nanonet import negf
 import time
 from calc.utils import quad
 

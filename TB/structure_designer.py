@@ -12,7 +12,7 @@ import scipy.spatial
 import torch
 import torch.nn as nn
 from TB.abstract_interfaces import AbstractStructureDesigner
-from TB.aux_functions import xyz2tensor, count_species, is_in_coords, print_dict
+from TB.aux_functions import xyz2tensor, xyz2np, count_species, is_in_coords, print_dict
 
 
 class StructDesignerXYZ(AbstractStructureDesigner):
@@ -52,7 +52,6 @@ class StructDesignerXYZ(AbstractStructureDesigner):
         self.params = nn.ParameterList()
         # ------------ parse xyz file or string --------------
         xyz = kwargs.get('xyz', None)
-        xyz_new = kwargs.get('xyz_new', None)
 
         try:
             with open(xyz, 'r') as read_file:
@@ -65,6 +64,7 @@ class StructDesignerXYZ(AbstractStructureDesigner):
             coords = kwargs.get('coords', None)
         else:
             labels, coords = xyz2tensor(reader)
+            _, coords_np = xyz2np(reader)
 
 
         # for i in range(len(labels_new)):
@@ -88,16 +88,13 @@ class StructDesignerXYZ(AbstractStructureDesigner):
         # their number per unit cell
         self._num_of_nodes = sum(self.num_of_species.values())
         # ------- make list of coordinates and kd-tree -------
-        self._atom_list = OrderedDict(list(zip(labels, coords)))
-        '''Temporary'''
-        # for key in self._atom_list:
-        #     self.atom_list[key].requires_grad_()
-        # print("#######################################")
-        # print(list(self._atom_list.values()))
-        # print("#######################################")
-        self._kd_tree = scipy.spatial.cKDTree(torch.stack(list(self._atom_list.values())),
+        self._atom_list = OrderedDict(list(zip(labels, coords))) # tensor format
+        self._atom_list_np = OrderedDict(list(zip(labels, coords_np))) # ndarry format
+
+
+        self._kd_tree = scipy.spatial.cKDTree(np.array(list(self._atom_list_np.values())),
                                               leafsize=1,
-                                              balanced_tree=True)
+                                              balanced_tree=True) 
 
         # self._kd_tree = scipy.spatial.cKDTree(torch.stack([x.detach() for x in self._atom_list.values()]),
         #                                       leafsize=1,
@@ -112,14 +109,16 @@ class StructDesignerXYZ(AbstractStructureDesigner):
         self.sort_func = kwargs.get('sort_func', None)
         self.reorder = None
 
-        for key in self._atom_list:
-            self.params.append(nn.Parameter(self._atom_list[key]))
-            self._atom_list[key] = self.params[-1]
+        # for key in self._atom_list:
+        #     self.params.append(nn.Parameter(self._atom_list[key]))
+        #     self._atom_list[key] = self.params[-1]
+
+        self._atom_list_eq = self._atom_list_np.copy() # ndarry format
 
         if self.sort_func is not None:
             self._sort(labels, coords)
 
-        self.atom_list_eq = self._atom_list.copy()
+        
 
     def _sort(self, labels, coords):
         """
@@ -135,9 +134,8 @@ class StructDesignerXYZ(AbstractStructureDesigner):
         -------
 
         """
-        if not isinstance(coords, torch.Tensor):
-            coords = torch.tensor(coords, dtype=torch.float64)
-        h_matrix = torch.zeros((coords.shape[0], coords.shape[0]))
+        coords = np.array(coords)
+        h_matrix = np.zeros((coords.shape[0], coords.shape[0]))
 
         self._nn_distance = 2 * self._nn_distance
         for j in range(len(coords)):
@@ -156,17 +154,79 @@ class StructDesignerXYZ(AbstractStructureDesigner):
             self.left_lead = np.squeeze(np.concatenate([np.where(indices == item) for item in self.left_lead]))
         if (isinstance(self.right_lead, list) or isinstance(self.right_lead, np.ndarray)) and len(self.right_lead) > 0:
             self.right_lead = np.squeeze(np.concatenate([np.where(indices == item) for item in self.right_lead]))
-        coords = coords[indices]
-        labels = [labels[i] for i in indices]
+        # coords = coords[indices]
+        # labels = [labels[i] for i in indices]
+
         _atom_list_last = [(key, val) for key, val in self._atom_list.items()]
         _atom_list_last = [_atom_list_last[i] for i in indices]
+
+        _atom_list_np_last = [(key, val) for key, val in self._atom_list_np.items()]
+        _atom_list_np_last = [_atom_list_np_last[i] for i in indices]
+
+        _atom_list_eq_last = [(key, val) for key, val in self._atom_list_eq.items()]
+        _atom_list_eq_last = [_atom_list_eq_last[i] for i in indices]
+
         self._atom_list = OrderedDict(_atom_list_last)
+        self._atom_list_np = OrderedDict(_atom_list_np_last)
+        self._atom_list_eq = OrderedDict(_atom_list_eq_last)
 
         # self._atom_list = OrderedDict(list(zip(labels, coords)))
         # self._kd_tree = scipy.spatial.cKDTree(torch.stack(list(self._atom_list.values())), leafsize=1, balanced_tree=True)
-        self._kd_tree = scipy.spatial.cKDTree(torch.stack([x.detach() for x in self._atom_list.values()]),
-                                              leafsize=1,
-                                              balanced_tree=True)
+        self._kd_tree = scipy.spatial.cKDTree(np.array(list(self._atom_list_np.values())), leafsize=1, balanced_tree=True)
+
+    def _sort_device(self, labels, coords):
+        """
+
+        Parameters
+        ----------
+        labels :
+
+        coords :
+
+
+        Returns
+        -------
+
+        """
+        coords = np.array(coords)
+        h_matrix = np.zeros((coords.shape[0], coords.shape[0]))
+
+        self._nn_distance = 2 * self._nn_distance
+        for j in range(len(coords)):
+            ans = self.get_neighbours(j)
+            h_matrix[j, ans] = 1
+
+        self._nn_distance = self._nn_distance / 2
+
+        indices = self.sort_func(coords=coords,
+                                 left_lead=self.left_lead,
+                                 right_lead=self.right_lead,
+                                 mat=h_matrix)
+
+        self.reorder = indices
+        if (isinstance(self.left_lead, list) or isinstance(self.left_lead, np.ndarray)) and len(self.left_lead) > 0:
+            self.left_lead = np.squeeze(np.concatenate([np.where(indices == item) for item in self.left_lead]))
+        if (isinstance(self.right_lead, list) or isinstance(self.right_lead, np.ndarray)) and len(self.right_lead) > 0:
+            self.right_lead = np.squeeze(np.concatenate([np.where(indices == item) for item in self.right_lead]))
+        # coords = coords[indices]
+        # labels = [labels[i] for i in indices]
+
+        _atom_list_last = [(key, val) for key, val in self._atom_list.items()]
+        _atom_list_last = [_atom_list_last[i] for i in indices]
+
+        _atom_list_np_last = [(key, val) for key, val in self._atom_list_np.items()]
+        _atom_list_np_last = [_atom_list_np_last[i] for i in indices]
+
+        # _atom_list_eq_last = [(key, val) for key, val in self._atom_list_eq.items()]
+        # _atom_list_eq_last = [_atom_list_eq_last[i] for i in indices]
+
+        self._atom_list = OrderedDict(_atom_list_last)
+        self._atom_list_np = OrderedDict(_atom_list_np_last)
+        # self._atom_list_eq = OrderedDict(_atom_list_eq_last)
+
+        # self._atom_list = OrderedDict(list(zip(labels, coords)))
+        # self._kd_tree = scipy.spatial.cKDTree(torch.stack(list(self._atom_list.values())), leafsize=1, balanced_tree=True)
+        self._kd_tree = scipy.spatial.cKDTree(np.array(list(self._atom_list_np.values())), leafsize=1, balanced_tree=True)
 
     def add_leads(self, left_lead, right_lead):
         """
@@ -189,6 +249,18 @@ class StructDesignerXYZ(AbstractStructureDesigner):
     def atom_list(self):
         """ """
         return self._atom_list
+
+    @property
+    def atom_list_eq(self):
+        return self._atom_list_eq
+    
+    @property
+    def atom_list_frozen(self):
+        return self._atom_list
+
+    @property
+    def atom_list_np(self):
+        return self._atom_list_np
 
     @property
     def num_of_nodes(self):
@@ -238,21 +310,25 @@ class CyclicTopology(AbstractStructureDesigner):
 
     """
 
-    def __init__(self, primitive_cell_vectors, labels, coords, nn_distance):
+    def __init__(self, primitive_cell_vectors, labels, coords_np, nn_distance):
+        #  这边 coords 传进来的得是np 类型
 
         self._nn_distance = nn_distance
-        self.pcv = torch.tensor(primitive_cell_vectors)
+        self.pcv = np.array(primitive_cell_vectors)
 
         # compute vectors' lengths
         self.sizes = []
         for item in self.pcv:
-            self.sizes.append(torch.norm(item))
+            self.sizes.append(np.linalg.norm(item))
 
         self.interfacial_atoms_ind = []
         self.virtual_and_interfacial_atoms = OrderedDict()
-        self._generate_atom_list(labels, coords)
 
-        self._kd_tree = scipy.spatial.cKDTree(torch.stack(list(self.virtual_and_interfacial_atoms.values())).detach(),
+        self.shift = np.zeros(3)
+
+        self._generate_atom_list(labels, coords_np)
+
+        self._kd_tree = scipy.spatial.cKDTree(np.array(list(self.virtual_and_interfacial_atoms.values())),
                                               leafsize=100, balanced_tree=True)
 
         logging.info("Primitive_cell_vectors: \n {} \n".format(primitive_cell_vectors))
@@ -266,78 +342,88 @@ class CyclicTopology(AbstractStructureDesigner):
         return self.virtual_and_interfacial_atoms
 
     def _generate_atom_list(self, labels, coords):
-        """
+            """
+            Parameters
+            ----------
+            labels :
+                labels of atoms
+            coords :
+                coordinates of atoms
+            Returns
+            -------
+            """
 
-        Parameters
-        ----------
-        labels :
-            labels of atoms
-        coords :
-            coordinates of atoms
+            # matrices of distances between atoms and interfaces
+            distances1 = np.empty((len(coords), len(self.pcv)), dtype=float)
+            distances2 = np.empty((len(coords), len(self.pcv)), dtype=float)
 
-        Returns
-        -------
+            for j1, coord in enumerate(coords):    # for each atom in the unit cell
+                for j2, basis_vec in enumerate(self.pcv):    # for lattice basis vector
 
-        """
+                    # compute distance to the primary plane of the unit cell
+                    distances1[j1, j2] = np.inner(coord - self.shift, basis_vec) / self.sizes[j2]
+                    # compute distance to the adjacent plane of the  unit cell
+                    distances2[j1, j2] = np.inner(coord - self.shift - basis_vec, basis_vec) / self.sizes[j2]
 
-        # matrices of distances between atoms and interfaces
-        distances1 = torch.empty((len(coords), len(self.pcv)), dtype=torch.float64)
-        distances2 = torch.empty((len(coords), len(self.pcv)), dtype=torch.float64)
+            for item in distances1.T:
+                self.shift += coords[np.argmin(item)]
 
-        for j1, coord in enumerate(coords):  # for each atom in the unit cell
-            for j2, basis_vec in enumerate(self.pcv):  # for lattice basis vector
+            for j1, coord in enumerate(coords):    # for each atom in the unit cell
+                for j2, basis_vec in enumerate(self.pcv):    # for lattice basis vector
 
-                # compute distance to the primary plane of the unit cell
-                distances1[j1, j2] = torch.inner(coord, basis_vec) / self.sizes[j2]
-                # compute distance to the adjacent plane of the  unit cell
-                distances2[j1, j2] = torch.inner(coord - basis_vec, basis_vec) / self.sizes[j2]
+                    # compute distance to the primary plane of the unit cell
+                    distances1[j1, j2] = np.inner(coord - self.shift, basis_vec) / self.sizes[j2]
+                    # compute distance to the adjacent plane of the  unit cell
+                    distances2[j1, j2] = np.inner(coord - self.shift - basis_vec, basis_vec) / self.sizes[j2]
 
-        # transform distance to the boolean variable defining whether atom belongs to the interface or not
-        distances1 = torch.abs(distances1 - torch.min(distances1)) < self._nn_distance * 0.25
-        distances2 = torch.abs(torch.abs(distances2) - torch.min(torch.abs(distances2))) < self._nn_distance * 0.25
+            # transform distance to the boolean variable defining whether atom belongs to the interface or not
+            distances1 = np.abs(distances1 - np.min(distances1)) < self._nn_distance * 0.25
+            distances2 = np.abs(np.abs(distances2) - np.min(np.abs(distances2))) < self._nn_distance * 0.25
 
-        # distances1 = np.ones(distances1.shape)
-        # distances2 = np.ones(distances1.shape)
+            # distances1 = np.ones(distances1.shape)
+            # distances2 = np.ones(distances1.shape)
 
-        # form new lists of atoms
-        count = 0
-        for j, item in enumerate(coords):
+            # form new lists of atoms
+            count = 0
+            for j, item in enumerate(coords):
 
-            if any(distances1[j]):
-                self.virtual_and_interfacial_atoms.update({str(j) + "_" + labels[j]: item})
-                self.interfacial_atoms_ind.append(j)
+                if any(distances1[j]):
+                    self.virtual_and_interfacial_atoms.update({str(j) + "_" + labels[j]: item})
+                    self.interfacial_atoms_ind.append(j)
 
-                for surf in np.where(distances1[j])[0]:
-                    count = self._translate_atom_1st_order(item,
-                                                           self.pcv[surf],
-                                                           "_" + str(j) + "_" + labels[j],
-                                                           coords,
-                                                           count)
+                    for surf in np.where(distances1[j])[0]:
 
-                    count = self._translate_atom_2d_order(item,
-                                                          self.pcv[surf],
-                                                          "_" + str(j) + "_" + labels[j],
-                                                          coords,
-                                                          count)
+                        count = self._translate_atom_1st_order(item,
+                                                            np.array(self.pcv[surf]),
+                                                            "_" + str(j) + "_" + labels[j],
+                                                            coords,
+                                                            count)
 
-            if any(distances2[j]):
-                self.virtual_and_interfacial_atoms.update({str(j) + "_" + labels[j]: item})
-                self.interfacial_atoms_ind.append(j)
-                for surf in np.where(distances2[j])[0]:
-                    count = self._translate_atom_1st_order(item,
-                                                           -1 * self.pcv[surf],
-                                                           "_" + str(j) + "_" + labels[j],
-                                                           coords,
-                                                           count)
+                        count = self._translate_atom_2d_order(item,
+                                                            np.array(self.pcv[surf]),
+                                                            "_" + str(j) + "_" + labels[j],
+                                                            coords,
+                                                            count)
 
-                    count = self._translate_atom_2d_order(item,
-                                                          -1 * self.pcv[surf],
-                                                          "_" + str(j) + "_" + labels[j],
-                                                          coords,
-                                                          count)
+                if any(distances2[j]):
+                    self.virtual_and_interfacial_atoms.update({str(j) + "_" + labels[j]: item})
+                    self.interfacial_atoms_ind.append(j)
+                    for surf in np.where(distances2[j])[0]:
 
-        # remove non-unique elements
-        self.interfacial_atoms_ind = list(set(self.interfacial_atoms_ind))
+                        count = self._translate_atom_1st_order(item,
+                                                            -1 * np.array(self.pcv[surf]),
+                                                            "_" + str(j) + "_" + labels[j],
+                                                            coords,
+                                                            count)
+
+                        count = self._translate_atom_2d_order(item,
+                                                            -1 * np.array(self.pcv[surf]),
+                                                            "_" + str(j) + "_" + labels[j],
+                                                            coords,
+                                                            count)
+
+            # remove non-unique elements
+            self.interfacial_atoms_ind = list(set(self.interfacial_atoms_ind))
 
     def _translate_atom_1st_order(self, atom_coords, cell_vector, label, penalty_coords, count):
         """
@@ -363,7 +449,7 @@ class CyclicTopology(AbstractStructureDesigner):
         try_coords = atom_coords + cell_vector
 
         if not is_in_coords(try_coords, penalty_coords) and \
-                not is_in_coords(try_coords, torch.stack(list(self.virtual_and_interfacial_atoms.values()))):
+                not is_in_coords(try_coords, np.array(list(self.virtual_and_interfacial_atoms.values()))):
             self.virtual_and_interfacial_atoms.update({"*_" + str(count) + label: try_coords})
             count += 1
 
@@ -395,14 +481,14 @@ class CyclicTopology(AbstractStructureDesigner):
             try_coords = atom_coords + cell_vector + vec
 
             if not is_in_coords(try_coords, penalty_coords) and \
-                    not is_in_coords(try_coords, torch.stack(list(self.virtual_and_interfacial_atoms.values()))):
+                    not is_in_coords(try_coords, np.array(list(self.virtual_and_interfacial_atoms.values()))):
                 self.virtual_and_interfacial_atoms.update({"**_" + str(count) + label: try_coords})
                 count += 1
 
             try_coords = atom_coords + cell_vector - vec
 
             if not is_in_coords(try_coords, penalty_coords) and \
-                    not is_in_coords(try_coords, torch.stack(list(self.virtual_and_interfacial_atoms.values()))):
+                    not is_in_coords(try_coords, np.array(list(self.virtual_and_interfacial_atoms.values()))):
                 self.virtual_and_interfacial_atoms.update({"**_" + str(count) + label: try_coords})
                 count += 1
 
@@ -448,14 +534,14 @@ class CyclicTopology(AbstractStructureDesigner):
 
         """
 
-        distance_to_surface1 = torch.inner(coords, leads) / torch.norm(leads)
-        distance_to_surface2 = torch.inner(coords - leads, leads) / torch.norm(leads)
+        distance_to_surface1 = np.inner(coords, leads) / np.linalg.norm(leads)
+        distance_to_surface2 = np.inner(coords - leads, leads) / np.linalg.norm(leads)
 
         flag = None
 
-        if distance_to_surface1 < 1e-1:
+        if distance_to_surface1 < 1e-4:
             flag = 'L'
-        if distance_to_surface2 >= -1e-1:
+        if distance_to_surface2 >= -1e-4:
             flag = 'R'
 
         return flag

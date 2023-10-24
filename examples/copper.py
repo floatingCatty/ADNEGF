@@ -1,12 +1,12 @@
 import ase
 import torch
-from transport import Transport_tb
 from ase.lattice.cubic import FaceCenteredCubic
 from ase.visualize.plot import plot_atoms
 import matplotlib.pyplot as plt
 import numpy as np
 from TB.orbitals import Orbitals
 from TB.hamiltonian_initializer import set_tb_params, set_tb_params_bond_length
+from transport import Transport_tb
 
 if __name__ == '__main__':
     atoms = FaceCenteredCubic(directions=[[1, -1, 0], [1, 1, -2], [1, 1, 1]],

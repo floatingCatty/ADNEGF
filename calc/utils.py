@@ -1,5 +1,6 @@
 import torch
 import numpy as np
+import resource
 from xitorch._core.pure_function import get_pure_function, make_sibling
 from typing import Callable, Union, Mapping, Any, Sequence
 from xitorch.debug.modes import is_debug_enabled
@@ -386,12 +387,22 @@ class TensorNonTensorSeparator(object):
             params[idx] = p
         return params
 
-def finite_difference(fn, x, h, p=1, dtype=torch.float64):
+def finite_difference(fn, x, h, dtype=torch.float64):
     t = torch.randn(1, dtype=dtype)
     h = torch.scalar_tensor(h, dtype=dtype)
-    if p == 1:
-        dev = fn(x+h).type_as(t) - fn(x-h).type_as(t)
-        dev = dev / (2*h)
+    shape = x.shape
+    x = x.flatten()
+    dev = torch.zeros_like(x)
+    for i, ix in enumerate(x):
+        xp = x.clone()
+        xm = x.clone()
+        xp[i] += h
+        xm[i] -= h
+        dev[i] = fn(xp.reshape(shape)).type_as(t) - fn(xm.reshape(shape)).type_as(t)
+        dev[i] = dev[i] / (2*h)
+    
+    dev = dev.reshape(shape)
+    
 
     return dev
 
@@ -698,11 +709,11 @@ class geneticalgorithm():
         self.best_function = obj
         temp_report = []
         ##############################################################
-        start = time.time()
+        start = time.perf_counter()
         t = 1
         counter = 0
         while t <= self.iterate:
-            temp_report.append((self.report,self.best_function,self.best_variable,time.time()-start))
+            temp_report.append((self.report,self.best_function,self.best_variable,time.perf_counter()-start))
             torch.save(obj=temp_report ,f="../dop_GA"+str(self.id)+".pth")
 
 
