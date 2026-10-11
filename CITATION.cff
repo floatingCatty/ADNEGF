@@ -1,0 +1,37 @@
+cff-version: 1.2.0
+message: "If you use AD-NEGF in research, please cite the associated Physical Review B paper."
+type: software
+title: "AD-NEGF"
+repository-code: "https://github.com/floatingCatty/ADNEGF"
+url: "https://floatingcatty.github.io/research/ad-negf/"
+authors:
+  - given-names: "Zhanghao"
+    family-names: "Zhouyin"
+  - given-names: "Xiang"
+    family-names: "Chen"
+  - given-names: "Peng"
+    family-names: "Zhang"
+  - given-names: "Jun"
+    family-names: "Wang"
+  - given-names: "Lei"
+    family-names: "Wang"
+preferred-citation:
+  type: article
+  title: "Automatic differentiable nonequilibrium Green's function formalism: An end-to-end differentiable quantum transport simulator"
+  authors:
+    - given-names: "Zhanghao"
+      family-names: "Zhouyin"
+    - given-names: "Xiang"
+      family-names: "Chen"
+    - given-names: "Peng"
+      family-names: "Zhang"
+    - given-names: "Jun"
+      family-names: "Wang"
+    - given-names: "Lei"
+      family-names: "Wang"
+  journal: "Physical Review B"
+  volume: 108
+  issue: 19
+  year: 2023
+  doi: "10.1103/PhysRevB.108.195143"
+  url: "https://doi.org/10.1103/PhysRevB.108.195143"
